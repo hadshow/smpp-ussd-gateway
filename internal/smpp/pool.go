@@ -68,60 +68,91 @@ func InitTelcoPools(configs []configloader.TelcoSMPPConfig) {
     }
 }
 
+func ReloadTelcoConfig(newConfigs []configloader.TelcoSMPPConfig) {
+    logger.Info("Reloading telco SMPP configurations...")
+    CloseAllPools()         // Close current connections
+    InitTelcoPools(newConfigs) // Initialize new connections
+}
+
+
 func createConnection(ip string, port int, sysID, password, telcoName string) (*SMPPConnection, error) {
     addr := ipPort(ip, port)
-    tx := &smpp.Transceiver{
-        Addr:   addr,
-        User:   sysID,
-        Passwd: password,
+
+    // Declare tx first so it can be used inside the handler
+    var tx *smpp.Transceiver
+    tx = &smpp.Transceiver{
+        Addr:         addr,
+        User:         sysID,
+        Passwd:       password,
+        EnquireLink:  10 * time.Second,
+        BindInterval: 5 * time.Second,
+        Handler: smpp.HandlerFunc(func(p pdu.Body) {
+            handleUSSDPDU(tx, p, telcoName)
+        }),
     }
 
+    // Bind SMPP connection
+    statusChan := tx.Bind()
+
+    // Monitor SMPP connection status
     go func() {
-        for p := range tx.Receive() {
-            logger.Info("Received PDU", zap.String("addr", addr), zap.Any("pdu", p))
-            if p.Header().ID == pdu.DeliverSMID {
-                startTime := time.Now()
-
-                from := p.Fields()[pdufield.SourceAddr].String()
-                to := p.Fields()[pdufield.DestinationAddr].String()
-                shortMessage := p.Fields()[pdufield.ShortMessage].String()
-
-                serviceCode := extractServiceCode(shortMessage)
-                sessionID := fmt.Sprintf("%d", p.Header().Seq)
-
-                sessionData := map[string]string{
-                    "from":       from,
-                    "to":         to,
-                    "message":    shortMessage,
-                    "session_id": sessionID,
-                    "telco":      telcoName,
-                }
-
-                responseText, err := routing.PushUSSDRequest(serviceCode, sessionData)
-                if err != nil {
-                    logger.Error("Failed to push USSD request", zap.String("serviceCode", serviceCode), zap.Error(err))
-                    continue
-                }
-
-                respPDU := tx.Submit(&smpp.ShortMessage{
-                    Src:  to,
-                    Dst:  from,
-                    Text: pdutext.Raw(responseText),
-                })
-
-                endTime := time.Now()
-                durationMs := endTime.Sub(startTime).Milliseconds()
-
-                if respPDU != nil {
-                    logger.Info("Sent USSD response", zap.String("to", from), zap.String("session_id", sessionID))
-                }
-
-                go logTransaction(from, to, shortMessage, responseText, telcoName, sessionID, startTime, endTime, durationMs)
+        for status := range statusChan {
+            if status.Error() != nil {
+                logger.Error("SMPP connection error", zap.String("addr", addr), zap.Error(status.Error()))
+            } else {
+                logger.Info("SMPP connection status", zap.String("addr", addr), zap.String("status", status.Status().String()))
             }
         }
     }()
 
     return &SMPPConnection{Client: tx, Addr: addr, Alive: true}, nil
+}
+
+
+
+func handleUSSDPDU(tx *smpp.Transceiver, pduPacket pdu.Body, telcoName string) {
+    if pduPacket.Header().ID != pdu.DeliverSMID {
+        return
+    }
+
+    startTime := time.Now()
+    from := pduPacket.Fields()[pdufield.SourceAddr].String()
+    to := pduPacket.Fields()[pdufield.DestinationAddr].String()
+    shortMessage := pduPacket.Fields()[pdufield.ShortMessage].String()
+
+    serviceCode := extractServiceCode(shortMessage)
+    sessionID := fmt.Sprintf("%d", pduPacket.Header().Seq)
+
+    sessionData := map[string]string{
+        "from":       from,
+        "to":         to,
+        "message":    shortMessage,
+        "session_id": sessionID,
+        "telco":      telcoName,
+    }
+
+    responseText, err := routing.PushUSSDRequest(serviceCode, sessionData)
+    if err != nil {
+        logger.Error("Failed to push USSD request", zap.String("serviceCode", serviceCode), zap.Error(err))
+        return
+    }
+
+    _, err = tx.Submit(&smpp.ShortMessage{
+        Src:  to,
+        Dst:  from,
+        Text: pdutext.Raw(responseText),
+    })
+
+    endTime := time.Now()
+    durationMs := endTime.Sub(startTime).Milliseconds()
+
+    if err != nil {
+        logger.Error("Failed to send USSD response", zap.Error(err))
+    } else {
+        logger.Info("Sent USSD response", zap.String("to", from), zap.String("session_id", sessionID))
+    }
+
+    go logTransaction(from, to, shortMessage, responseText, telcoName, sessionID, startTime, endTime, durationMs)
 }
 
 func logTransaction(msisdn, shortcode, message, response, telco, sessionID string, start, end time.Time, duration int64) {

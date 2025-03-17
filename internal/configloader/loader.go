@@ -37,4 +37,40 @@ func LoadConfig(filePath string) (Config, error) {
     if err := viper.ReadInConfig(); err != nil {
         return config, err
     }
+    if err := viper.Unmarshal(&config); err != nil {
+        return config, err
+    }
+    return config, nil
+}
+
+func WatchConfigFile(filePath string, onChange func(Config)) {
+    v := viper.New()
+    v.SetConfigFile(filePath)
+    if err := v.ReadInConfig(); err != nil {
+        fmt.Println("Failed to read config for watch:", err)
+        return
+    }
+
+    v.WatchConfig()
+    v.OnConfigChange(func(e fsnotify.Event) {
+        time.Sleep(500 * time.Millisecond)
+        var config Config
+        if err := v.Unmarshal(&config); err != nil {
+            fmt.Println("Failed to reload config:", err)
+            return
+        }
+        fmt.Println("Config file changed, reloading...")
+        onChange(config)
+    })
+
+    go func() {
+        for {
+            if _, err := os.Stat(filePath); err != nil {
+                fmt.Println("Config file not found, stopping watcher.")
+                return
+            }
+            time.Sleep(10 * time.Second)
+        }
+    }()
+}
 

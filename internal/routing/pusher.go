@@ -8,7 +8,7 @@ import (
     "net/http"
     "strings"
 
-    "go-smpp-ussd-gateway/internal/configloader"
+    "smpp_ussd_gateway/internal/configloader"
     "go.uber.org/zap"
 )
 
@@ -63,5 +63,7 @@ func PushUSSDRequest(serviceCode string, sessionData map[string]string) (string,
     defer resp.Body.Close()
 
     respBody, _ := ioutil.ReadAll(resp.Body)
-    logger.Info("USSD 
+    logger.Info("USSD push complete", zap.String("serviceCode", serviceCode), zap.Int("status", resp.StatusCode))
+    return string(respBody), nil
+}
 
