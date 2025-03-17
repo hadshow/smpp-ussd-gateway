@@ -1,0 +1,15 @@
+
+telcos:
+  - name: "MTNN"
+    ips: ["10.0.1.1", "10.0.1.2"]
+    port: 2775
+    system_id: "mtnn_user"
+    password: "mtnn_pass"
+    bind_type: "transceiver"
+
+routes:
+  - service_code: "*123#"
+    method: "POST"
+    url: "https://partner1.com/ussd"
+    headers:
+      Authorization: "Bearer token123"
