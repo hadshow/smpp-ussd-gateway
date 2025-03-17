@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -7,14 +6,28 @@ import (
     "os/signal"
     "syscall"
 
+    "github.com/joho/godotenv" // NEW for .env support
     "smpp_ussd_gateway/internal/api"
     "smpp_ussd_gateway/internal/configloader"
     "smpp_ussd_gateway/internal/smpp"
 )
 
 func main() {
-    connStr := "postgres://user:password@localhost:5432/ussd_gateway?sslmode=disable"
-    err := smpp.InitDB(connStr)
+    // Load .env file
+    err := godotenv.Load()
+    if err != nil {
+        fmt.Println("Error loading .env file")
+        os.Exit(1)
+    }
+
+    // Load DB connection string from .env
+    connStr := os.Getenv("DB_CONN_STRING")
+    if connStr == "" {
+        fmt.Println("Environment variable DB_CONN_STRING is not set")
+        os.Exit(1)
+    }
+
+    err = smpp.InitDB(connStr)
     if err != nil {
         panic("DB connection failed: " + err.Error())
     }
@@ -41,3 +54,4 @@ func main() {
     smpp.CloseAllPools()
     fmt.Println("Shutdown complete.")
 }
+
